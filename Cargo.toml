@@ -22,7 +22,7 @@ thiserror = "2.0"
 default = []
 
 [lib]
-name = "rust_patterns_components"
+name = "rust_pattern_components"
 path = "src/lib.rs"
 
 [package.metadata.docs.rs]
