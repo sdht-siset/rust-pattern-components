@@ -1,6 +1,6 @@
 [package]
 name = "rust-pattern-components"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "A Rust library providing implementations of common design patterns"
 authors = ["Linshan Yang <yanglsh@yeah.net>"]

@@ -159,23 +159,6 @@ pub trait Observable {
     fn detach(&mut self, observer: Arc<dyn Observer<Subject = Self>>);
 }
 
-/// 通知策略
-///
-/// 定义当观察者处理更新失败时的行为。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NotifyStrategy {
-    /// 立即停止并返回错误
-    ///
-    /// 这是默认策略，当一个观察者失败时立即停止通知过程。
-    StopOnError,
-
-    /// 忽略错误并继续通知
-    ///
-    /// 即使某个观察者失败，也继续通知其他观察者。
-    /// 错误会被忽略，继续执行。
-    IgnoreError,
-}
-
 /// 观察者注册表
 ///
 /// 管理一组观察者并在状态变化时通知它们。注册表维护观察者的弱引用列表，
@@ -196,7 +179,7 @@ pub enum NotifyStrategy {
 ///
 /// ```
 /// use std::sync::Arc;
-/// use rust_patterns_components::{Observable, Observer, ObserverRegistry, NotifyStrategy};
+/// use rust_patterns_components::{Observable, Observer, ObserverRegistry};
 ///
 /// struct Sensor;
 ///
@@ -301,37 +284,93 @@ where
     /// # 参数
     ///
     /// - `state`: 要通知的新状态引用
-    /// - `strategy`: 通知策略，指定观察者失败时的行为
-    ///   使用 [`NotifyStrategy::StopOnError`] 或 [`NotifyStrategy::IgnoreError`]
     ///
     /// # 返回值
     ///
-    /// - `Ok(())`: 所有观察者都成功处理了更新，或错误被忽略
-    /// - `Err(<T as Observable>::Error)`: 某个观察者处理更新时返回了错误（当使用 `StopOnError` 策略时）
+    /// - `Ok(())`: 所有观察者都成功处理了更新
+    /// - `Err(<T as Observable>::Error)`: 某个观察者处理更新时返回了错误，立即停止通知其他观察者
     ///
-    /// # 通知策略
+    /// # 行为
     ///
-    /// 根据指定的通知策略决定行为：
-    /// - `NotifyStrategy::StopOnError`: 立即返回第一个错误，停止通知其他观察者
-    /// - `NotifyStrategy::IgnoreError`: 忽略错误，继续通知其他观察者，总是返回 `Ok(())`
+    /// - 遍历所有观察者并调用其 `update` 方法
+    /// - 当某个观察者返回错误时，立即停止并返回该错误
+    /// - 自动清理无效的观察者弱引用（通过 `Weak::upgrade` 过滤）
     ///
     /// # 性能
     ///
     /// 此方法会自动清理无效的观察者弱引用（通过 `Weak::upgrade` 过滤）。
-    pub fn notify(
-        &self,
-        state: &<T as Observable>::State,
-        strategy: NotifyStrategy,
-    ) -> Result<(), <T as Observable>::Error> {
+    pub fn notify(&self, state: &<T as Observable>::State) -> Result<(), <T as Observable>::Error> {
         self.observers
             .iter()
             .flat_map(Weak::upgrade)
-            .try_for_each(|observer| match observer.update(state) {
-                ok @ Ok(_) => ok,
-                err @ Err(_) => match strategy {
-                    NotifyStrategy::StopOnError => err,
-                    NotifyStrategy::IgnoreError => Ok(()),
-                },
+            .try_for_each(|observer| observer.update(state))
+    }
+
+    /// 通知所有观察者状态变化，忽略错误
+    ///
+    /// 此方法会通知所有已注册的观察者状态变化，但会忽略任何观察者返回的错误。
+    /// 即使某个观察者处理更新失败，也会继续通知其他观察者。
+    ///
+    /// # 参数
+    ///
+    /// * `state` - 要通知的状态变化
+    ///
+    /// # 行为
+    ///
+    /// - 遍历所有观察者并调用其 `update` 方法
+    /// - 忽略所有观察者返回的错误（使用 `let _ = ...`）
+    /// - 自动清理无效的观察者弱引用（通过 `Weak::upgrade` 过滤）
+    ///
+    /// # 使用场景
+    ///
+    /// 适用于以下情况：
+    /// - 观察者的错误不应该阻止其他观察者接收通知
+    /// - 错误处理不是关键，可以安全忽略
+    /// - 需要确保所有观察者都能收到通知，即使某些观察者可能失败
+    ///
+    /// # 与 `notify` 方法的区别
+    ///
+    /// - `notify`: 遇到第一个错误就停止，并返回该错误
+    /// - `notify_ignore_error`: 忽略所有错误，继续通知所有观察者
+    ///
+    /// # 示例
+    ///
+    /// ```rust
+    /// use rust_pattern_components::{Observable, Observer, ObserverRegistry};
+    /// use std::sync::{Arc, Weak};
+    ///
+    /// struct Counter {
+    ///     registry: ObserverRegistry<Self>,
+    ///     value: u64,
+    /// }
+    ///
+    /// impl Observable for Counter {
+    ///     type State = u64;
+    ///     type Error = String;
+    ///
+    ///     fn attach(&mut self, observer: Arc<dyn Observer<Subject = Self>>) {
+    ///         self.registry.attach(observer);
+    ///     }
+    ///
+    ///     fn detach(&mut self, observer: Arc<dyn Observer<Subject = Self>>) {
+    ///         self.registry.detach(observer);
+    ///     }
+    /// }
+    ///
+    /// let counter = Counter {
+    ///     registry: ObserverRegistry::new(),
+    ///     value: 42,
+    /// };
+    ///
+    /// // 即使观察者可能失败，也会通知所有观察者
+    /// counter.registry.notify_ignore_error(&counter.value);
+    /// ```
+    pub fn notify_ignore_error(&self, state: &<T as Observable>::State) {
+        self.observers
+            .iter()
+            .flat_map(Weak::upgrade)
+            .for_each(|observer| {
+                let _ = observer.update(state);
             })
     }
 }
@@ -371,8 +410,7 @@ mod tests {
 
         fn update_value(&mut self, new_value: i32) -> Result<(), String> {
             self.value = new_value;
-            self.registry
-                .notify(&self.value, NotifyStrategy::StopOnError)
+            self.registry.notify(&self.value)
         }
 
         fn get_value(&self) -> i32 {
@@ -503,7 +541,7 @@ mod tests {
     }
 
     #[test]
-    fn test_notify_strategy_stop_on_error() {
+    fn test_notify_stop_on_error() {
         let mut observable = TestObservable::new(0);
         let failing_observer = Arc::new(FailingObserver::new(2)); // 第二次调用失败
         let normal_observer = Arc::new(TestObserver::new("normal"));
@@ -523,7 +561,7 @@ mod tests {
     }
 
     #[test]
-    fn test_notify_strategy_ignore_error() {
+    fn test_notify_ignore_error() {
         // 为 IgnoreErrorObservable 创建专门的观察者
         struct IgnoreErrorObservable {
             registry: ObserverRegistry<Self>,
@@ -592,10 +630,9 @@ mod tests {
                 }
             }
 
-            fn update_value(&mut self, new_value: i32) -> Result<(), String> {
+            fn update_value(&mut self, new_value: i32) {
                 self.value = new_value;
-                self.registry
-                    .notify(&self.value, NotifyStrategy::IgnoreError)
+                self.registry.notify_ignore_error(&self.value);
             }
         }
 
@@ -620,12 +657,12 @@ mod tests {
         observable.attach(normal_observer.clone());
 
         // 第一次更新应该成功
-        assert!(observable.update_value(1).is_ok());
+        observable.update_value(1);
         assert_eq!(failing_observer.get_call_count(), 1);
         assert_eq!(normal_observer.get_last_value(), 1);
 
-        // 第二次更新应该返回 Ok（IgnoreError 策略）
-        assert!(observable.update_value(2).is_ok());
+        // 第二次更新应该成功（IgnoreError 策略）
+        observable.update_value(2);
         assert_eq!(failing_observer.get_call_count(), 2);
         assert_eq!(normal_observer.get_last_value(), 2); // 正常观察者应该收到第二次通知
     }

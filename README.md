@@ -21,7 +21,7 @@
 
 ```toml
 [dependencies]
-rust-pattern-components = "{version}"
+rust-pattern-components = "0.1.2"
 ```
 
 ## 包含的设计模式
@@ -155,7 +155,7 @@ fn main() {
 - `Observer<Subject>`：观察者 trait
 - `Observable`：被观察者 trait
 - `ObserverRegistry`：观察者注册表
-- `NotifyStrategy`：通知策略
+
 
 #### 示例
 
