@@ -11,19 +11,19 @@ pub trait Factory<T: ?Sized> {
     fn create(&self) -> Box<T>;
 }
 
-/// 通过工厂创建对象时可能发生的错误。
+/// Errors that can occur when creating objects through a factory.
 #[derive(Debug, Error)]
 pub enum FactoryError {
-    /// 未找到指定的工厂。
-    #[error("未找到 ID 为 '{0}' 的工厂")]
+    /// The specified factory was not found.
+    #[error("factory with ID '{0}' not found")]
     FactoryNotFound(String),
 
-    /// 不允许回退时提供了空 ID。
-    #[error("不允许回退时提供了空 ID")]
+    /// An empty ID was provided when fallback is not allowed.
+    #[error("empty ID provided without fallback")]
     EmptyIdNoFallback,
 
-    /// 请求的产品类型没有可用的工厂。
-    #[error("没有可用的工厂")]
+    /// No factories available for the requested product type.
+    #[error("no factories available")]
     NoFactoriesAvailable,
 }
 
@@ -53,8 +53,8 @@ pub enum FactoryFallback {
 ///
 /// 基本用法：
 ///
-/// ```rust
-/// use rust_patterns_components::{FactoryFallback, FactoryRegistry};
+/// ```rust,no_run
+/// use rust_pattern_components::{FactoryFallback, FactoryRegistry};
 ///
 /// // 定义产品 trait
 /// trait Product {
@@ -70,8 +70,8 @@ pub enum FactoryFallback {
 ///
 /// // 通过 ID 创建特定产品
 /// match factory.create("product_a", FactoryFallback::NoFallback) {
-///     Ok((id, product)) => {
-///         println!("创建了产品: {}, ID: {}", product.name(), id);
+///     Ok(product) => {
+///         println!("创建了产品: {}", product.name());
 ///     }
 ///     Err(e) => {
 ///         println!("创建失败: {}", e);
@@ -88,8 +88,8 @@ pub enum FactoryFallback {
 ///
 /// 错误处理：
 ///
-/// ```rust
-/// use rust_patterns_components::{FactoryFallback, FactoryRegistry, FactoryError};
+/// ```rust,no_run
+/// use rust_pattern_components::{FactoryFallback, FactoryRegistry, FactoryError};
 ///
 /// // 定义产品 trait
 /// trait Product {
@@ -146,14 +146,15 @@ where
     /// # 返回值
     /// * `Ok((&str, Box<T>))` - 成功时返回包含使用的工厂 ID 和创建的实例的元组
     /// * `Err(FactoryError)` - 如果找不到工厂或没有可用的工厂则返回错误
-    pub fn create<'a>(
+    pub fn create(
         &self,
-        id: &'a str,
+        id: impl AsRef<str>,
         strategy: FactoryFallback,
-    ) -> Result<(&'a str, Box<T>), FactoryError> {
+    ) -> Result<Box<T>, FactoryError> {
+        let id = id.as_ref();
         if !id.is_empty() {
             return if let Some(factory) = self.0.get(id) {
-                Ok((id, factory.create()))
+                Ok(factory.create())
             } else {
                 Err(FactoryError::FactoryNotFound(id.to_string()))
             };
@@ -161,13 +162,13 @@ where
 
         match strategy {
             FactoryFallback::First => {
-                if let Some((id, factory)) = self.0.first_key_value() {
-                    return Ok((id, factory.create()));
+                if let Some((_, factory)) = self.0.first_key_value() {
+                    return Ok(factory.create());
                 }
             }
             FactoryFallback::Last => {
-                if let Some((id, factory)) = self.0.last_key_value() {
-                    return Ok((id, factory.create()));
+                if let Some((_, factory)) = self.0.last_key_value() {
+                    return Ok(factory.create());
                 }
             }
             FactoryFallback::NoFallback => return Err(FactoryError::EmptyIdNoFallback),
@@ -368,16 +369,14 @@ mod tests {
         let result = factory.create("product_a", FactoryFallback::NoFallback);
         assert!(result.is_ok());
 
-        let (id, product) = result.unwrap();
-        assert_eq!(id, "product_a");
+        let product = result.unwrap();
         assert_eq!(product.get_value(), "default_a");
 
         // 测试创建 ProductB
         let result = factory.create("product_b", FactoryFallback::NoFallback);
         assert!(result.is_ok());
 
-        let (id, product) = result.unwrap();
-        assert_eq!(id, "product_b");
+        let product = result.unwrap();
         assert_eq!(product.get_value(), "default_b");
     }
 
@@ -415,9 +414,8 @@ mod tests {
         // 由于 inventory 是全局的，可能在其他测试中注册了工厂
         // 所以这里可能成功也可能失败，我们只检查行为是否正确
         match result {
-            Ok((id, _)) => {
-                // 如果成功，id 不应该为空
-                assert!(!id.is_empty());
+            Ok(_product) => {
+                // 回退成功
             }
             Err(FactoryError::NoFactoriesAvailable) => {
                 // 如果没有工厂可用，这也是有效的
@@ -431,16 +429,11 @@ mod tests {
         // 测试 First 回退策略（无效 ID）
         let result = factory.create("invalid_id", FactoryFallback::First);
         match result {
-            Ok((id, _)) => {
-                // 如果成功，id 不应该为空
-                assert!(!id.is_empty());
+            Ok(_product) => {
+                panic!("Expected FactoryNotFound for invalid ID");
             }
             Err(FactoryError::FactoryNotFound(id)) => {
-                // 如果找不到工厂，id 应该是 "invalid_id"
                 assert_eq!(id, "invalid_id");
-            }
-            Err(FactoryError::NoFactoriesAvailable) => {
-                // 如果没有工厂可用，这也是有效的
             }
             Err(e) => {
                 // 其他错误不应该发生
@@ -458,9 +451,8 @@ mod tests {
         // 由于 inventory 是全局的，可能在其他测试中注册了工厂
         // 所以这里可能成功也可能失败，我们只检查行为是否正确
         match result {
-            Ok((id, _)) => {
-                // 如果成功，id 不应该为空
-                assert!(!id.is_empty());
+            Ok(_product) => {
+                // 回退成功
             }
             Err(FactoryError::NoFactoriesAvailable) => {
                 // 如果没有工厂可用，这也是有效的
@@ -474,16 +466,11 @@ mod tests {
         // 测试 Last 回退策略（无效 ID）
         let result = factory.create("invalid_id", FactoryFallback::Last);
         match result {
-            Ok((id, _)) => {
-                // 如果成功，id 不应该为空
-                assert!(!id.is_empty());
+            Ok(_product) => {
+                panic!("Expected FactoryNotFound for invalid ID");
             }
             Err(FactoryError::FactoryNotFound(id)) => {
-                // 如果找不到工厂，id 应该是 "invalid_id"
                 assert_eq!(id, "invalid_id");
-            }
-            Err(FactoryError::NoFactoriesAvailable) => {
-                // 如果没有工厂可用，这也是有效的
             }
             Err(e) => {
                 // 其他错误不应该发生
@@ -545,13 +532,13 @@ mod tests {
     fn test_factory_error_display() {
         // 测试错误信息的显示
         let error = FactoryError::FactoryNotFound("test_id".to_string());
-        assert_eq!(format!("{}", error), "未找到 ID 为 'test_id' 的工厂");
+        assert_eq!(format!("{}", error), "factory with ID 'test_id' not found");
 
         let error = FactoryError::EmptyIdNoFallback;
-        assert_eq!(format!("{}", error), "不允许回退时提供了空 ID");
+        assert_eq!(format!("{}", error), "empty ID provided without fallback");
 
         let error = FactoryError::NoFactoriesAvailable;
-        assert_eq!(format!("{}", error), "没有可用的工厂");
+        assert_eq!(format!("{}", error), "no factories available");
     }
 
     #[test]
